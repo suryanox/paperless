@@ -3,9 +3,12 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use directories::UserDirs;
 
-use crate::{pdf, walker};
+use crate::{index, pdf, walker};
 
-pub fn run(mut paths: Vec<PathBuf>, _force: bool) -> Result<()> {
+pub fn run(mut paths: Vec<PathBuf>, force: bool) -> Result<()> {
+    // Fail fast if an index exists, before doing any slow work
+    let idx = index::create_index(force)?;
+
     if paths.is_empty() {
         let home = UserDirs::new()
             .context("could not determine home directory")?
@@ -18,16 +21,17 @@ pub fn run(mut paths: Vec<PathBuf>, _force: bool) -> Result<()> {
     println!("Found {} PDFs, extracting text...", pdfs.len());
 
     let (docs, stats) = pdf::extract_all(pdfs);
-
     println!(
-        "Done: {} ok, {} failed, {} empty (likely scans)",
+        "Extracted: {} ok, {} failed, {} empty (likely scans)",
         stats.succeeded, stats.failed, stats.empty
     );
 
-    if let Some(doc) = docs.iter().find(|d| !d.empty) {
-        let preview: String = doc.text.chars().take(200).collect();
-        println!("\nSample: {}\n{}", doc.file.path.display(), preview);
-    }
+    index::write_docs(&idx, &docs)?;
+    println!(
+        "Indexed {} documents into {}",
+        docs.len(),
+        index::index_dir()?.display()
+    );
 
     Ok(())
 }
