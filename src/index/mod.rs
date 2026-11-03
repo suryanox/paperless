@@ -1,14 +1,15 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::UNIX_EPOCH;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use directories::ProjectDirs;
-use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
-use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, Value};
+use serde::{Deserialize, Serialize};
+use tantivy::collector::{DocSetCollector, TopDocs};
+use tantivy::query::{AllQuery, QueryParser};
+use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
 use tantivy::snippet::SnippetGenerator;
-use tantivy::{Index, TantivyDocument, doc};
+use tantivy::{doc, Index, TantivyDocument, Term};
 
 use crate::pdf::ExtractedDoc;
 
@@ -35,9 +36,7 @@ impl Fields {
 
 fn build_schema() -> Schema {
     let mut b = Schema::builder();
-    // STRING = indexed as one raw token (exact match, good for lookup/delete by path)
     b.add_text_field("path", STRING | STORED);
-    // TEXT = tokenized + lowercased, so it's searchable word by word
     b.add_text_field("filename", TEXT | STORED);
     b.add_text_field("body", TEXT | STORED);
     b.add_u64_field("size", STORED);
@@ -45,13 +44,39 @@ fn build_schema() -> Schema {
     b.build()
 }
 
-pub fn index_dir() -> Result<PathBuf> {
-    let dirs =
-        ProjectDirs::from("", "", "paperless").context("could not determine data directory")?;
-    Ok(dirs.data_dir().join("index"))
+fn data_dir() -> Result<PathBuf> {
+    let dirs = ProjectDirs::from("", "", "paperless")
+        .context("could not determine data directory")?;
+    Ok(dirs.data_dir().to_path_buf())
 }
 
-/// Creates a fresh index on disk. Fails if one exists unless `force` is set.
+pub fn index_dir() -> Result<PathBuf> {
+    Ok(data_dir()?.join("index"))
+}
+
+/// Remembers what `init` scanned so `update` can reuse it.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Meta {
+    pub roots: Vec<PathBuf>,
+}
+
+fn meta_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join("meta.json"))
+}
+
+pub fn save_meta(meta: &Meta) -> Result<()> {
+    fs::write(meta_path()?, serde_json::to_string_pretty(meta)?)?;
+    Ok(())
+}
+
+pub fn load_meta() -> Result<Meta> {
+    let raw = fs::read_to_string(meta_path()?)
+        .context("no saved roots found, run `paperless init` first")?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+// ---------- open / create ----------
+
 pub fn create_index(force: bool) -> Result<Index> {
     let dir = index_dir()?;
 
@@ -69,36 +94,75 @@ pub fn create_index(force: bool) -> Result<Index> {
     Ok(Index::create_in_dir(&dir, build_schema())?)
 }
 
-pub fn write_docs(index: &Index, docs: &[ExtractedDoc]) -> Result<()> {
+pub fn open_index() -> Result<Index> {
+    let dir = index_dir()?;
+    if !dir.exists() {
+        bail!("no index found, run `paperless init` first");
+    }
+    Ok(Index::open_in_dir(&dir)?)
+}
+
+// ---------- writing ----------
+
+fn to_document(f: &Fields, d: &ExtractedDoc) -> TantivyDocument {
+    let path = d.file.path.to_string_lossy().into_owned();
+    let filename = d
+        .file
+        .path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    doc!(
+        f.path => path,
+        f.filename => filename,
+        f.body => d.text.as_str(),
+        f.size => d.file.size,
+        f.mtime => d.file.mtime_secs(),
+    )
+}
+
+/// Deletes every doc whose path is in `remove_paths`, adds `docs`, one commit.
+pub fn apply_changes(index: &Index, remove_paths: &[String], docs: &[ExtractedDoc]) -> Result<()> {
     let f = Fields::from_schema(&index.schema())?;
-    let mut writer = index.writer(100_000_000)?; // 100MB heap budget
+    let mut writer = index.writer(100_000_000)?;
 
+    // Deletes must come BEFORE adds: a delete only affects docs added earlier
+    // in the same batch, so this order keeps re-added changed files alive.
+    for p in remove_paths {
+        writer.delete_term(Term::from_field_text(f.path, p));
+    }
     for d in docs {
-        let path = d.file.path.to_string_lossy().into_owned();
-        let filename = d
-            .file
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let mtime = d
-            .file
-            .mtime
-            .duration_since(UNIX_EPOCH)
-            .map(|t| t.as_secs())
-            .unwrap_or(0);
-
-        writer.add_document(doc!(
-            f.path => path,
-            f.filename => filename,
-            f.body => d.text.as_str(),
-            f.size => d.file.size,
-            f.mtime => mtime,
-        ))?;
+        writer.add_document(to_document(&f, d))?;
     }
 
     writer.commit()?;
     Ok(())
+}
+
+pub fn write_docs(index: &Index, docs: &[ExtractedDoc]) -> Result<()> {
+    apply_changes(index, &[], docs)
+}
+
+/// path -> (size, mtime_secs) for everything currently indexed.
+pub fn indexed_files(index: &Index) -> Result<HashMap<String, (u64, u64)>> {
+    let f = Fields::from_schema(&index.schema())?;
+    let searcher = index.reader()?.searcher();
+    let addrs = searcher.search(&AllQuery, &DocSetCollector)?;
+
+    let mut map = HashMap::with_capacity(addrs.len());
+    for addr in addrs {
+        let doc: TantivyDocument = searcher.doc(addr)?;
+        let path = doc
+            .get_first(f.path)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let size = doc.get_first(f.size).and_then(|v| v.as_u64()).unwrap_or(0);
+        let mtime = doc.get_first(f.mtime).and_then(|v| v.as_u64()).unwrap_or(0);
+        map.insert(path, (size, mtime));
+    }
+    Ok(map)
 }
 
 pub struct Hit {
@@ -108,23 +172,16 @@ pub struct Hit {
 }
 
 pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
-    let dir = index_dir()?;
-    if !dir.exists() {
-        bail!("no index found, run `paperless init` first");
-    }
-
-    let index = Index::open_in_dir(&dir)?;
+    let index = open_index()?;
     let f = Fields::from_schema(&index.schema())?;
     let searcher = index.reader()?.searcher();
 
     let mut parser = QueryParser::for_index(&index, vec![f.filename, f.body]);
-    parser.set_conjunction_by_default(); // every word must match
-    parser.set_field_boost(f.filename, 3.0); // filename hits rank higher
-    // (field, prefix, max edit distance, transposition counts as 1 edit)
+    parser.set_conjunction_by_default();
+    parser.set_field_boost(f.filename, 3.0);
     parser.set_field_fuzzy(f.filename, false, 1, true);
     parser.set_field_fuzzy(f.body, false, 1, true);
 
-    // Lenient: odd characters in user input won't turn into a hard error
     let (query, _errors) = parser.parse_query_lenient(query_str);
 
     let top = searcher.search(&query, &TopDocs::with_limit(limit).order_by_score())?;
@@ -135,23 +192,13 @@ pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
     let mut hits = Vec::with_capacity(top.len());
     for (score, addr) in top {
         let doc: TantivyDocument = searcher.doc(addr)?;
-
         let path = doc
             .get_first(f.path)
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-
-        let snippet = snippets
-            .snippet_from_doc(&doc)
-            .fragment()
-            .replace('\n', " ");
-
-        hits.push(Hit {
-            path,
-            score,
-            snippet,
-        });
+        let snippet = snippets.snippet_from_doc(&doc).fragment().replace('\n', " ");
+        hits.push(Hit { path, score, snippet });
     }
 
     Ok(hits)

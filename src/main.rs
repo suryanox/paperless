@@ -14,6 +14,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Commands::Init { path, force } => commands::init::run(path, force)?,
         Commands::Search { query, limit } => commands::search::run(query.join(" "), limit)?,
+        Commands::Update { path } => commands::update::run(path)?,
     }
 
     Ok(())

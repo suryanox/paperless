@@ -2,12 +2,22 @@ use std::path::PathBuf;
 use std::time::SystemTime;
 
 use walkdir::{DirEntry, WalkDir};
+use std::time::UNIX_EPOCH;
 
 #[derive(Debug, Clone)]
 pub struct PdfFile {
     pub path: PathBuf,
     pub size: u64,
     pub mtime: SystemTime,
+}
+
+impl PdfFile {
+    pub fn mtime_secs(&self) -> u64 {
+        self.mtime
+            .duration_since(UNIX_EPOCH)
+            .map(|t| t.as_secs())
+            .unwrap_or(0)
+    }
 }
 
 const SKIP_DIRS: &[&str] = &["node_modules", "target", "proc", "sys", "dev"];
