@@ -1,21 +1,23 @@
 use anyhow::Result;
+use console::style;
 
-use crate::index;
+use crate::{index, ui};
 
-pub fn run(query: String, limit: usize) -> Result<()> {
+pub fn run(query: String, limit: usize, json: bool) -> Result<()> {
     let hits = index::search(&query, limit)?;
 
+    if json {
+        println!("{}", serde_json::to_string_pretty(&hits)?);
+        return Ok(());
+    }
+
     if hits.is_empty() {
-        println!("No results for {:?}", query);
+        println!("No results for {}", style(&query).bold());
         return Ok(());
     }
 
     for (i, hit) in hits.iter().enumerate() {
-        println!("{}. {}  ({:.2})", i + 1, hit.path, hit.score);
-        if !hit.snippet.is_empty() {
-            println!("   {}", hit.snippet);
-        }
+        ui::print_hit(i + 1, hit);
     }
-
     Ok(())
 }

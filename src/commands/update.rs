@@ -61,9 +61,11 @@ pub fn run(path_override: Vec<PathBuf>) -> Result<()> {
             .collect::<std::io::Result<Vec<_>>>()?
     };
 
+    let sp = crate::ui::spinner("Scanning for changes…");
     let found = walker::find_pdfs(&roots);
     let indexed = index::indexed_files(&idx)?;
     let d = diff(found, &indexed, &roots);
+    sp.finish_and_clear();
 
     let (n_add, n_upd, n_rem, unchanged) = (
         d.to_add.len(),
@@ -73,11 +75,10 @@ pub fn run(path_override: Vec<PathBuf>) -> Result<()> {
     );
 
     if n_add + n_upd + n_rem == 0 {
-        println!("Up to date ({} unchanged)", unchanged);
+        crate::ui::up_to_date(unchanged);
         return Ok(());
     }
 
-    // Changed files: delete the old entry, then add the fresh one
     let mut remove = d.to_remove;
     remove.extend(
         d.to_update
@@ -89,10 +90,6 @@ pub fn run(path_override: Vec<PathBuf>) -> Result<()> {
     let (docs, stats) = pdf::extract_all(to_extract);
     index::apply_changes(&idx, &remove, &docs)?;
 
-    println!(
-        "+{} added, ~{} updated, -{} removed, {} unchanged ({} failed to extract)",
-        n_add, n_upd, n_rem, unchanged, stats.failed
-    );
-
+    crate::ui::print_update_summary(n_add, n_upd, n_rem, unchanged, stats.failed);
     Ok(())
 }

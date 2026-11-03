@@ -1,12 +1,14 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use directories::UserDirs;
 
 use crate::index::{self, Meta};
-use crate::{pdf, walker};
+use crate::{pdf, ui, walker};
 
 pub fn run(mut paths: Vec<PathBuf>, force: bool) -> Result<()> {
+    let start = Instant::now();
     let idx = index::create_index(force)?;
 
     if paths.is_empty() {
@@ -25,22 +27,18 @@ pub fn run(mut paths: Vec<PathBuf>, force: bool) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    let sp = ui::spinner("Scanning for PDFs…");
     let pdfs = walker::find_pdfs(&roots);
-    println!("Found {} PDFs, extracting text...", pdfs.len());
+    sp.finish_with_message(format!("Found {} PDFs", pdfs.len()));
 
+    let total_bytes: u64 = pdfs.iter().map(|p| p.size).sum();
     let (docs, stats) = pdf::extract_all(pdfs);
-    println!(
-        "Extracted: {} ok, {} failed, {} empty (likely scans)",
-        stats.succeeded, stats.failed, stats.empty
-    );
 
+    let sp = ui::spinner("Writing index…");
     index::write_docs(&idx, &docs)?;
     index::save_meta(&Meta { roots })?;
-    println!(
-        "Indexed {} documents into {}",
-        docs.len(),
-        index::index_dir()?.display()
-    );
+    sp.finish_and_clear();
 
+    ui::print_init_summary(&stats, total_bytes, start.elapsed());
     Ok(())
 }

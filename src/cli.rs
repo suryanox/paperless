@@ -1,12 +1,21 @@
 use std::path::PathBuf;
 
+use clap::builder::styling::{AnsiColor, Styles};
 use clap::{Parser, Subcommand};
+
+const STYLES: Styles = Styles::styled()
+    .header(AnsiColor::Yellow.on_default().bold())
+    .usage(AnsiColor::Yellow.on_default().bold())
+    .literal(AnsiColor::Cyan.on_default().bold())
+    .placeholder(AnsiColor::Green.on_default());
 
 #[derive(Debug, Parser)]
 #[command(
     name = "paperless",
     version,
-    about = "Fuzzy search for all the PDFs on your machine"
+    about = "Fuzzy search for all the PDFs on your machine",
+    styles = STYLES,
+    after_help = "Examples:\n  paperless init --path ~/Documents\n  paperless search tax return 2023\n  paperless search invoice --json | jq '.[].path'"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -29,6 +38,10 @@ pub enum Commands {
 
         #[arg(short, long, default_value_t = 10)]
         limit: usize,
+
+        /// Output results as JSON (for scripts)
+        #[arg(long)]
+        json: bool,
     },
     /// Re-scan and update the index (only touches changed files)
     Update {

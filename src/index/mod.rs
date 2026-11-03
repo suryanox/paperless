@@ -165,10 +165,13 @@ pub fn indexed_files(index: &Index) -> Result<HashMap<String, (u64, u64)>> {
     Ok(map)
 }
 
+#[derive(Serialize)]
 pub struct Hit {
     pub path: String,
     pub score: f32,
     pub snippet: String,
+    #[serde(skip)]
+    pub matches: Vec<(usize, usize)>,
 }
 
 pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
@@ -198,11 +201,12 @@ pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
             .get_first(f.body)
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        let snippet = make_snippet(body, query_str, 80);
+        let (snippet, matches) = make_snippet(body, query_str, 80);
         hits.push(Hit {
             path,
             score,
             snippet,
+            matches,
         });
     }
 
@@ -225,34 +229,38 @@ fn words_with_offsets(s: &str) -> Vec<(usize, &str)> {
     out
 }
 
-/// Text around the first body word matching a query term (exact, else within 1 edit).
-fn make_snippet(body: &str, query: &str, radius: usize) -> String {
+fn is_match(terms: &[String], w: &str) -> bool {
+    // Fuzzy only for terms of 4+ chars, otherwise "a" would match every 1-letter word
+    terms
+        .iter()
+        .any(|t| t == w || (t.chars().count() >= 4 && damerau_levenshtein(t, w) <= 1))
+}
+
+/// Returns the snippet text plus byte ranges (into that text) of matched words.
+fn make_snippet(body: &str, query: &str, radius: usize) -> (String, Vec<(usize, usize)>) {
     let terms: Vec<String> = words_with_offsets(query)
         .into_iter()
         .map(|(_, w)| w.to_lowercase())
         .collect();
 
-    let words: Vec<(usize, String)> = words_with_offsets(body)
-        .into_iter()
-        .map(|(i, w)| (i, w.to_lowercase()))
-        .collect();
+    let words = words_with_offsets(body);
 
-    let pos = words
+    // Prefer an exact hit as the anchor, fall back to a fuzzy one
+    let anchor = words
         .iter()
-        .find(|(_, w)| terms.iter().any(|t| t == w))
+        .find(|(_, w)| terms.contains(&w.to_lowercase()))
         .or_else(|| {
             words
                 .iter()
-                .find(|(_, w)| terms.iter().any(|t| damerau_levenshtein(t, w) <= 1))
+                .find(|(_, w)| is_match(&terms, &w.to_lowercase()))
         })
         .map(|(i, w)| (*i, w.len()));
 
-    let (start, end) = match pos {
+    let (start, end) = match anchor {
         Some((i, len)) => (i.saturating_sub(radius), (i + len + radius).min(body.len())),
-        None => (0, radius * 2), // filename-only match: show the start of the doc
+        None => (0, radius * 2),
     };
 
-    // Snap to valid UTF-8 boundaries
     let mut start = start.min(body.len());
     while !body.is_char_boundary(start) {
         start -= 1;
@@ -262,11 +270,19 @@ fn make_snippet(body: &str, query: &str, radius: usize) -> String {
         end += 1;
     }
 
-    let text = body[start..end]
+    let core = body[start..end]
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
     let pre = if start > 0 { "…" } else { "" };
     let post = if end < body.len() { "…" } else { "" };
-    format!("{pre}{text}{post}")
+
+    // Highlight every matching word inside the snippet, not just the anchor
+    let matches = words_with_offsets(&core)
+        .into_iter()
+        .filter(|(_, w)| is_match(&terms, &w.to_lowercase()))
+        .map(|(i, w)| (i + pre.len(), i + pre.len() + w.len()))
+        .collect();
+
+    (format!("{pre}{core}{post}"), matches)
 }
