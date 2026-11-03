@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use strsim::damerau_levenshtein;
 use tantivy::collector::{DocSetCollector, TopDocs};
 use tantivy::query::{AllQuery, QueryParser};
-use tantivy::schema::{Field, Schema, Value, STORED, STRING, TEXT};
-use tantivy::snippet::SnippetGenerator;
-use tantivy::{doc, Index, TantivyDocument, Term};
+use tantivy::schema::{Field, STORED, STRING, Schema, TEXT, Value};
+use tantivy::{Index, TantivyDocument, Term, doc};
 
 use crate::pdf::ExtractedDoc;
 
@@ -45,8 +45,8 @@ fn build_schema() -> Schema {
 }
 
 fn data_dir() -> Result<PathBuf> {
-    let dirs = ProjectDirs::from("", "", "paperless")
-        .context("could not determine data directory")?;
+    let dirs =
+        ProjectDirs::from("", "", "paperless").context("could not determine data directory")?;
     Ok(dirs.data_dir().to_path_buf())
 }
 
@@ -186,9 +186,6 @@ pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
 
     let top = searcher.search(&query, &TopDocs::with_limit(limit).order_by_score())?;
 
-    let mut snippets = SnippetGenerator::create(&searcher, &*query, f.body)?;
-    snippets.set_max_num_chars(160);
-
     let mut hits = Vec::with_capacity(top.len());
     for (score, addr) in top {
         let doc: TantivyDocument = searcher.doc(addr)?;
@@ -197,9 +194,79 @@ pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
             .and_then(|v| v.as_str())
             .unwrap_or_default()
             .to_string();
-        let snippet = snippets.snippet_from_doc(&doc).fragment().replace('\n', " ");
-        hits.push(Hit { path, score, snippet });
+        let body = doc
+            .get_first(f.body)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let snippet = make_snippet(body, query_str, 80);
+        hits.push(Hit {
+            path,
+            score,
+            snippet,
+        });
     }
 
     Ok(hits)
+}
+
+fn words_with_offsets(s: &str) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in s.char_indices() {
+        if c.is_alphanumeric() {
+            start.get_or_insert(i);
+        } else if let Some(st) = start.take() {
+            out.push((st, &s[st..i]));
+        }
+    }
+    if let Some(st) = start {
+        out.push((st, &s[st..]));
+    }
+    out
+}
+
+/// Text around the first body word matching a query term (exact, else within 1 edit).
+fn make_snippet(body: &str, query: &str, radius: usize) -> String {
+    let terms: Vec<String> = words_with_offsets(query)
+        .into_iter()
+        .map(|(_, w)| w.to_lowercase())
+        .collect();
+
+    let words: Vec<(usize, String)> = words_with_offsets(body)
+        .into_iter()
+        .map(|(i, w)| (i, w.to_lowercase()))
+        .collect();
+
+    let pos = words
+        .iter()
+        .find(|(_, w)| terms.iter().any(|t| t == w))
+        .or_else(|| {
+            words
+                .iter()
+                .find(|(_, w)| terms.iter().any(|t| damerau_levenshtein(t, w) <= 1))
+        })
+        .map(|(i, w)| (*i, w.len()));
+
+    let (start, end) = match pos {
+        Some((i, len)) => (i.saturating_sub(radius), (i + len + radius).min(body.len())),
+        None => (0, radius * 2), // filename-only match: show the start of the doc
+    };
+
+    // Snap to valid UTF-8 boundaries
+    let mut start = start.min(body.len());
+    while !body.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = end.min(body.len());
+    while !body.is_char_boundary(end) {
+        end += 1;
+    }
+
+    let text = body[start..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let pre = if start > 0 { "…" } else { "" };
+    let post = if end < body.len() { "…" } else { "" };
+    format!("{pre}{text}{post}")
 }

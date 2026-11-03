@@ -19,7 +19,10 @@ pub fn run(mut paths: Vec<PathBuf>, force: bool) -> Result<()> {
 
     let roots = paths
         .into_iter()
-        .map(|p| p.canonicalize().with_context(|| format!("bad path: {}", p.display())))
+        .map(|p| {
+            p.canonicalize()
+                .with_context(|| format!("bad path: {}", p.display()))
+        })
         .collect::<Result<Vec<_>>>()?;
 
     let pdfs = walker::find_pdfs(&roots);
@@ -33,7 +36,11 @@ pub fn run(mut paths: Vec<PathBuf>, force: bool) -> Result<()> {
 
     index::write_docs(&idx, &docs)?;
     index::save_meta(&Meta { roots })?;
-    println!("Indexed {} documents into {}", docs.len(), index::index_dir()?.display());
+    println!(
+        "Indexed {} documents into {}",
+        docs.len(),
+        index::index_dir()?.display()
+    );
 
     Ok(())
 }

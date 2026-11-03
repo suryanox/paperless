@@ -17,7 +17,6 @@ pub struct ExtractedDoc {
 
 #[derive(Debug, Default)]
 pub struct ExtractStats {
-    pub total: usize,
     pub succeeded: usize,
     pub failed: usize,
     pub empty: usize,
@@ -64,7 +63,6 @@ pub fn extract_all(files: Vec<PdfFile>) -> (Vec<ExtractedDoc>, ExtractStats) {
     pb.finish_and_clear();
 
     let stats = ExtractStats {
-        total,
         succeeded: docs.len(),
         failed: total - docs.len(),
         empty: docs.iter().filter(|d| d.empty).count(),

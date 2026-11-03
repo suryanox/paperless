@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use walkdir::{DirEntry, WalkDir};
 use std::time::UNIX_EPOCH;
+use walkdir::{DirEntry, WalkDir};
 
 #[derive(Debug, Clone)]
 pub struct PdfFile {

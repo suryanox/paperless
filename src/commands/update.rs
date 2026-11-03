@@ -41,7 +41,12 @@ fn diff(found: Vec<PdfFile>, indexed: &HashMap<String, (u64, u64)>, roots: &[Pat
         .cloned()
         .collect();
 
-    Diff { to_add, to_update, to_remove, unchanged }
+    Diff {
+        to_add,
+        to_update,
+        to_remove,
+        unchanged,
+    }
 }
 
 pub fn run(path_override: Vec<PathBuf>) -> Result<()> {
@@ -60,8 +65,12 @@ pub fn run(path_override: Vec<PathBuf>) -> Result<()> {
     let indexed = index::indexed_files(&idx)?;
     let d = diff(found, &indexed, &roots);
 
-    let (n_add, n_upd, n_rem, unchanged) =
-        (d.to_add.len(), d.to_update.len(), d.to_remove.len(), d.unchanged);
+    let (n_add, n_upd, n_rem, unchanged) = (
+        d.to_add.len(),
+        d.to_update.len(),
+        d.to_remove.len(),
+        d.unchanged,
+    );
 
     if n_add + n_upd + n_rem == 0 {
         println!("Up to date ({} unchanged)", unchanged);
@@ -70,7 +79,11 @@ pub fn run(path_override: Vec<PathBuf>) -> Result<()> {
 
     // Changed files: delete the old entry, then add the fresh one
     let mut remove = d.to_remove;
-    remove.extend(d.to_update.iter().map(|f| f.path.to_string_lossy().into_owned()));
+    remove.extend(
+        d.to_update
+            .iter()
+            .map(|f| f.path.to_string_lossy().into_owned()),
+    );
     let to_extract: Vec<PdfFile> = d.to_add.into_iter().chain(d.to_update).collect();
 
     let (docs, stats) = pdf::extract_all(to_extract);
