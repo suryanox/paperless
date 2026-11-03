@@ -12,9 +12,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { path, force } => {
-            println!("init: paths={:?} force={}", path, force);
-        }
+        Commands::Init { path, force } => commands::init::run(path, force)?,
         Commands::Search { query, limit } => {
             let query = query.join(" ");
             println!("search: query={:?} limit={}", query, limit);

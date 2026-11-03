@@ -3,7 +3,11 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "paperless", version, about = "Fuzzy search for all the PDFs on your machine")]
+#[command(
+    name = "paperless",
+    version,
+    about = "Fuzzy search for all the PDFs on your machine"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
