@@ -29,7 +29,8 @@ pub fn run(mut paths: Vec<PathBuf>, force: bool) -> Result<()> {
 
     let sp = ui::spinner("Scanning for PDFs…");
     let pdfs = walker::find_pdfs(&roots);
-    sp.finish_with_message(format!("Found {} PDFs", pdfs.len()));
+    sp.finish_and_clear();
+    ui::done(&format!("Found {} PDFs", ui::fmt_num(pdfs.len())));
 
     let total_bytes: u64 = pdfs.iter().map(|p| p.size).sum();
     let (docs, stats) = pdf::extract_all(pdfs);

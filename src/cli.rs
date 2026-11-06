@@ -39,13 +39,10 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 10)]
         limit: usize,
 
-        /// Output results as JSON (for scripts)
         #[arg(long)]
         json: bool,
     },
-    /// Re-scan and update the index (only touches changed files)
     Update {
-        /// Override the roots saved by `init` (repeatable)
         #[arg(short, long)]
         path: Vec<PathBuf>,
     },

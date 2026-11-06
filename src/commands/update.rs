@@ -12,8 +12,6 @@ struct Diff {
     to_remove: Vec<String>,
     unchanged: usize,
 }
-
-/// Pure logic, no tantivy, easy to unit test.
 fn diff(found: Vec<PdfFile>, indexed: &HashMap<String, (u64, u64)>, roots: &[PathBuf]) -> Diff {
     let mut to_add = Vec::new();
     let mut to_update = Vec::new();
@@ -32,8 +30,6 @@ fn diff(found: Vec<PdfFile>, indexed: &HashMap<String, (u64, u64)>, roots: &[Pat
         seen.insert(key);
     }
 
-    // Only remove entries under the roots we actually scanned, so a narrower
-    // `--path` override never wipes the rest of the index.
     let to_remove = indexed
         .keys()
         .filter(|k| !seen.contains(*k))

@@ -1,7 +1,7 @@
 use std::panic::{self, AssertUnwindSafe};
 use std::path::Path;
 
-use indicatif::{ProgressBar, ProgressStyle};
+use indicatif::ProgressStyle;
 use rayon::prelude::*;
 
 use crate::error::ExtractError;
@@ -11,7 +11,6 @@ use crate::walker::PdfFile;
 pub struct ExtractedDoc {
     pub file: PdfFile,
     pub text: String,
-    /// True when the text is empty/whitespace: likely a scan that needs OCR
     pub empty: bool,
 }
 
@@ -33,13 +32,12 @@ pub fn extract_text(path: &Path) -> Result<String, ExtractError> {
 pub fn extract_all(files: Vec<PdfFile>) -> (Vec<ExtractedDoc>, ExtractStats) {
     let total = files.len();
 
-    let pb = ProgressBar::new(total as u64);
+    let pb = crate::ui::progress_bar(total as u64, "Extracting");
     pb.set_style(
         ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} [{elapsed_precise}] {msg}")
             .unwrap(),
     );
 
-    // Silence panic messages so they don't garble the progress bar
     let prev_hook = panic::take_hook();
     panic::set_hook(Box::new(|_| {}));
 

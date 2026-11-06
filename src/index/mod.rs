@@ -54,7 +54,6 @@ pub fn index_dir() -> Result<PathBuf> {
     Ok(data_dir()?.join("index"))
 }
 
-/// Remembers what `init` scanned so `update` can reuse it.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Meta {
     pub roots: Vec<PathBuf>,
@@ -100,8 +99,6 @@ pub fn open_index() -> Result<Index> {
     Ok(Index::open_in_dir(&dir)?)
 }
 
-// ---------- writing ----------
-
 fn to_document(f: &Fields, d: &ExtractedDoc) -> TantivyDocument {
     let path = d.file.path.to_string_lossy().into_owned();
     let filename = d
@@ -120,13 +117,10 @@ fn to_document(f: &Fields, d: &ExtractedDoc) -> TantivyDocument {
     )
 }
 
-/// Deletes every doc whose path is in `remove_paths`, adds `docs`, one commit.
 pub fn apply_changes(index: &Index, remove_paths: &[String], docs: &[ExtractedDoc]) -> Result<()> {
     let f = Fields::from_schema(&index.schema())?;
     let mut writer = index.writer(100_000_000)?;
 
-    // Deletes must come BEFORE adds: a delete only affects docs added earlier
-    // in the same batch, so this order keeps re-added changed files alive.
     for p in remove_paths {
         writer.delete_term(Term::from_field_text(f.path, p));
     }
@@ -142,7 +136,6 @@ pub fn write_docs(index: &Index, docs: &[ExtractedDoc]) -> Result<()> {
     apply_changes(index, &[], docs)
 }
 
-/// path -> (size, mtime_secs) for everything currently indexed.
 pub fn indexed_files(index: &Index) -> Result<HashMap<String, (u64, u64)>> {
     let f = Fields::from_schema(&index.schema())?;
     let searcher = index.reader()?.searcher();
@@ -168,6 +161,8 @@ pub struct Hit {
     pub path: String,
     pub score: f32,
     pub snippet: String,
+    pub size: u64,
+    pub mtime: u64,
     #[serde(skip)]
     pub matches: Vec<(usize, usize)>,
 }
@@ -199,11 +194,15 @@ pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
             .get_first(f.body)
             .and_then(|v| v.as_str())
             .unwrap_or_default();
+        let size = doc.get_first(f.size).and_then(|v| v.as_u64()).unwrap_or(0);
+        let mtime = doc.get_first(f.mtime).and_then(|v| v.as_u64()).unwrap_or(0);
         let (snippet, matches) = make_snippet(body, query_str, 80);
         hits.push(Hit {
             path,
             score,
             snippet,
+            size,
+            mtime,
             matches,
         });
     }
@@ -228,13 +227,11 @@ fn words_with_offsets(s: &str) -> Vec<(usize, &str)> {
 }
 
 fn is_match(terms: &[String], w: &str) -> bool {
-    // Fuzzy only for terms of 4+ chars, otherwise "a" would match every 1-letter word
     terms
         .iter()
         .any(|t| t == w || (t.chars().count() >= 4 && damerau_levenshtein(t, w) <= 1))
 }
 
-/// Returns the snippet text plus byte ranges (into that text) of matched words.
 fn make_snippet(body: &str, query: &str, radius: usize) -> (String, Vec<(usize, usize)>) {
     let terms: Vec<String> = words_with_offsets(query)
         .into_iter()
@@ -243,7 +240,6 @@ fn make_snippet(body: &str, query: &str, radius: usize) -> (String, Vec<(usize, 
 
     let words = words_with_offsets(body);
 
-    // Prefer an exact hit as the anchor, fall back to a fuzzy one
     let anchor = words
         .iter()
         .find(|(_, w)| terms.contains(&w.to_lowercase()))
@@ -275,7 +271,6 @@ fn make_snippet(body: &str, query: &str, radius: usize) -> (String, Vec<(usize, 
     let pre = if start > 0 { "…" } else { "" };
     let post = if end < body.len() { "…" } else { "" };
 
-    // Highlight every matching word inside the snippet, not just the anchor
     let matches = words_with_offsets(&core)
         .into_iter()
         .filter(|(_, w)| is_match(&terms, &w.to_lowercase()))

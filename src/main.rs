@@ -12,7 +12,6 @@ use console::style;
 
 fn main() {
     if let Err(e) = run() {
-        // {:#} prints the whole cause chain on one line
         eprintln!("{} {:#}", style("error:").for_stderr().red().bold(), e);
         std::process::exit(1);
     }
