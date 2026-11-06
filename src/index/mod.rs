@@ -75,8 +75,6 @@ pub fn load_meta() -> Result<Meta> {
     Ok(serde_json::from_str(&raw)?)
 }
 
-// ---------- open / create ----------
-
 pub fn create_index(force: bool) -> Result<Index> {
     let dir = index_dir()?;
 
