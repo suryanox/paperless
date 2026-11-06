@@ -4,9 +4,9 @@ use anyhow::Result;
 
 use crate::{index, ui};
 
-pub fn run(query: String, limit: usize, json: bool) -> Result<()> {
+pub fn run(query: String, limit: usize, json: bool, snippets: usize) -> Result<()> {
     let start = Instant::now();
-    let hits = index::search(&query, limit)?;
+    let hits = index::search(&query, limit, snippets)?;
     let elapsed = start.elapsed();
 
     if json {

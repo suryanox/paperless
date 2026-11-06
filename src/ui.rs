@@ -137,11 +137,18 @@ pub fn print_hit(rank: usize, hit: &Hit, width: usize) {
     );
     println!("    {}", style(dir).blue().dim());
 
-    if !hit.snippet.is_empty() {
+    for sn in &hit.snippets {
         println!();
-        for line in wrap_ranges(&hit.snippet, width - INDENT) {
-            println!("    {}", highlight_line(&hit.snippet, line, &hit.matches));
+        for line in wrap_ranges(&sn.text, width - INDENT) {
+            println!("    {}", highlight_line(&sn.text, line, &sn.matches));
         }
+    }
+    if hit.hidden > 0 {
+        println!();
+        println!(
+            "    {}",
+            style(format!("+{} more passages in this file", hit.hidden)).dim()
+        );
     }
     println!();
 }

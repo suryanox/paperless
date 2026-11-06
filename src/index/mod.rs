@@ -157,17 +157,85 @@ pub fn indexed_files(index: &Index) -> Result<HashMap<String, (u64, u64)>> {
 }
 
 #[derive(Serialize)]
-pub struct Hit {
-    pub path: String,
-    pub score: f32,
-    pub snippet: String,
-    pub size: u64,
-    pub mtime: u64,
+pub struct Snippet {
+    pub text: String,
     #[serde(skip)]
     pub matches: Vec<(usize, usize)>,
 }
 
-pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
+#[derive(Serialize)]
+pub struct Hit {
+    pub path: String,
+    pub score: f32,
+    pub size: u64,
+    pub mtime: u64,
+    pub snippets: Vec<Snippet>,
+    pub hidden: usize,
+}
+
+fn build_snippet(body: &str, start: usize, end: usize, terms: &[String]) -> Snippet {
+    let mut start = start.min(body.len());
+    while !body.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = end.min(body.len());
+    while !body.is_char_boundary(end) {
+        end += 1;
+    }
+
+    let core = body[start..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let pre = if start > 0 { "…" } else { "" };
+    let post = if end < body.len() { "…" } else { "" };
+
+    let matches = words_with_offsets(&core)
+        .into_iter()
+        .filter(|(_, w)| is_match(terms, &w.to_lowercase()))
+        .map(|(i, w)| (i + pre.len(), i + pre.len() + w.len()))
+        .collect();
+
+    Snippet {
+        text: format!("{pre}{core}{post}"),
+        matches,
+    }
+}
+
+fn make_snippets(body: &str, query: &str, radius: usize, max: usize) -> (Vec<Snippet>, usize) {
+    let terms: Vec<String> = words_with_offsets(query)
+        .into_iter()
+        .map(|(_, w)| w.to_lowercase())
+        .collect();
+
+    let mut windows: Vec<(usize, usize)> = Vec::new();
+    for (i, w) in words_with_offsets(body) {
+        if !is_match(&terms, &w.to_lowercase()) {
+            continue;
+        }
+        let ws = i.saturating_sub(radius);
+        let we = (i + w.len() + radius).min(body.len());
+        match windows.last_mut() {
+            Some(last) if ws <= last.1 && we - last.0 <= radius * 4 => last.1 = we,
+            _ => windows.push((ws, we)),
+        }
+    }
+
+    if windows.is_empty() {
+        return (vec![build_snippet(body, 0, radius * 2, &terms)], 0);
+    }
+
+    let hidden = windows.len().saturating_sub(max);
+    let snippets = windows
+        .into_iter()
+        .take(max)
+        .map(|(s, e)| build_snippet(body, s, e, &terms))
+        .collect();
+
+    (snippets, hidden)
+}
+
+pub fn search(query_str: &str, limit: usize, max_snippets: usize) -> Result<Vec<Hit>> {
     let index = open_index()?;
     let f = Fields::from_schema(&index.schema())?;
     let searcher = index.reader()?.searcher();
@@ -196,14 +264,14 @@ pub fn search(query_str: &str, limit: usize) -> Result<Vec<Hit>> {
             .unwrap_or_default();
         let size = doc.get_first(f.size).and_then(|v| v.as_u64()).unwrap_or(0);
         let mtime = doc.get_first(f.mtime).and_then(|v| v.as_u64()).unwrap_or(0);
-        let (snippet, matches) = make_snippet(body, query_str, 80);
+        let (snippets, hidden) = make_snippets(body, query_str, 80, max_snippets);
         hits.push(Hit {
             path,
             score,
-            snippet,
             size,
             mtime,
-            matches,
+            snippets,
+            hidden,
         });
     }
 
@@ -230,52 +298,4 @@ fn is_match(terms: &[String], w: &str) -> bool {
     terms
         .iter()
         .any(|t| t == w || (t.chars().count() >= 4 && damerau_levenshtein(t, w) <= 1))
-}
-
-fn make_snippet(body: &str, query: &str, radius: usize) -> (String, Vec<(usize, usize)>) {
-    let terms: Vec<String> = words_with_offsets(query)
-        .into_iter()
-        .map(|(_, w)| w.to_lowercase())
-        .collect();
-
-    let words = words_with_offsets(body);
-
-    let anchor = words
-        .iter()
-        .find(|(_, w)| terms.contains(&w.to_lowercase()))
-        .or_else(|| {
-            words
-                .iter()
-                .find(|(_, w)| is_match(&terms, &w.to_lowercase()))
-        })
-        .map(|(i, w)| (*i, w.len()));
-
-    let (start, end) = match anchor {
-        Some((i, len)) => (i.saturating_sub(radius), (i + len + radius).min(body.len())),
-        None => (0, radius * 2),
-    };
-
-    let mut start = start.min(body.len());
-    while !body.is_char_boundary(start) {
-        start -= 1;
-    }
-    let mut end = end.min(body.len());
-    while !body.is_char_boundary(end) {
-        end += 1;
-    }
-
-    let core = body[start..end]
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let pre = if start > 0 { "…" } else { "" };
-    let post = if end < body.len() { "…" } else { "" };
-
-    let matches = words_with_offsets(&core)
-        .into_iter()
-        .filter(|(_, w)| is_match(&terms, &w.to_lowercase()))
-        .map(|(i, w)| (i + pre.len(), i + pre.len() + w.len()))
-        .collect();
-
-    (format!("{pre}{core}{post}"), matches)
 }

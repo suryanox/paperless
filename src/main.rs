@@ -23,9 +23,12 @@ fn run() -> anyhow::Result<()> {
     match cli.command {
         Commands::Init { path, force } => commands::init::run(path, force)?,
         Commands::Update { path } => commands::update::run(path)?,
-        Commands::Search { query, limit, json } => {
-            commands::search::run(query.join(" "), limit, json)?
-        }
+        Commands::Search {
+            query,
+            limit,
+            json,
+            snippets,
+        } => commands::search::run(query.join(" "), limit, json, snippets)?,
     }
 
     Ok(())

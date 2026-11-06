@@ -41,6 +41,9 @@ pub enum Commands {
 
         #[arg(long)]
         json: bool,
+
+        #[arg(short, long, default_value_t = 3)]
+        snippets: usize,
     },
     Update {
         #[arg(short, long)]
